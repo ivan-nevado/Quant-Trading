@@ -1,0 +1,11 @@
+DEBUG:__main__:Enter buy position: entry_price: 20083.95, mit_index: 6, SL: 19825.324829999998, TP: 20859.82551000001, FVG Top: 20083.95, FVG bottom: 19845.17
+DEBUG:__main__:Open trades: ()
+DEBUG:__main__:Checking bullish FVG: entry range: 19845.17 - 20083.95, SL: 19825.32, TP: 20859.83
+DEBUG:__main__:Current candle: Open=20274.53, High=20420.88, Low=20209.60, Close=20281.65
+DEBUG:__main__:Low of current candle not within FVG range
+DEBUG:__main__:Checking bullish FVG: entry range: 20198.23 - 20209.60, SL: 20178.03, TP: 20304.30
+DEBUG:__main__:Current candle: Open=20274.53, High=20420.88, Low=20209.60, Close=20281.65
+DEBUG:__main__:Attempting to place market buy order
+DEBUG:__main__:Market buy order placed successfully: <Order size=0.1, contingent=0>
+DEBUG:__main__:No open position
+DEBUG:__main__:Open trades after order attempt: ()
