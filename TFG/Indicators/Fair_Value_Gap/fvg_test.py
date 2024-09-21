@@ -158,7 +158,7 @@ def plot_fvg_with_rectangles(df, fvg_df, min_fvg_height):
     fig.show()
 
 # Set minimum FVG height and length (adjust these values as needed)
-min_fvg_height = 0.005
+min_fvg_height = 20
 
 # Plot the results
 plot_fvg_with_rectangles(df, fvg_df, min_fvg_height)

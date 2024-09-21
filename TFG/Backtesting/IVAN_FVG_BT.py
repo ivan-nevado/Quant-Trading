@@ -163,7 +163,7 @@ class FVGStrategy(Strategy):
                         
             
             
-df = df.loc['2022-01-01' : '2023-01-01']              
+df = df.loc['2023-01-01' : '2024-01-01']              
 
 bt = Backtest(df,
               FVGStrategy,
@@ -172,22 +172,23 @@ bt = Backtest(df,
               trade_on_close=True,
               exclusive_orders=False)  
 
-results = bt.optimize(
-    min_fvg_height=[10, 15, 20, 25, 30],
-    ema_period=[50, 75, 100, 125, 150, 175, 200],
-    sl_offset=[0.001,0.003, 0.005,0.007, 0.01],
-    risk_reward_ratio=[1.5, 2.0, 2.5, 3.0],
-    maximize='Return [%]'
-)
+# results = bt.optimize(
+#     min_fvg_height=[10, 15, 20, 25, 30],
+#     ema_period=[50, 75, 100, 125, 150, 175, 200],
+#     sl_offset=[0.001,0.003, 0.005,0.007, 0.01],
+#     risk_reward_ratio=[1.5, 2.0, 2.5, 3.0],
+#     maximize='Return [%]'
+# )
 
 
 
-# Print the optimized parameters
-print(f"Optimized parameters:")
-print(f"Best FVG height: {results._strategy.min_fvg_height}")
-print(f"Best EMA period: {results._strategy.ema_period}")
-print(f"Best stop loss offset: {results._strategy.sl_offset:.4f}")
-print(f"Best risk-reward ratio: {results._strategy.risk_reward_ratio:.2f}")
-
+# # Print the optimized parameters
+# print(f"Optimized parameters:")
+# print(f"Best FVG height: {results._strategy.min_fvg_height}")
+# print(f"Best EMA period: {results._strategy.ema_period}")
+# print(f"Best stop loss offset: {results._strategy.sl_offset:.4f}")
+# print(f"Best risk-reward ratio: {results._strategy.risk_reward_ratio:.2f}")
+stats = bt.run()
+print(stats)
 # print(results)
 bt.plot()

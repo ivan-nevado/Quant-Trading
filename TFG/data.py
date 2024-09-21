@@ -7,7 +7,7 @@ from math import ceil
 
 
 symbol = 'BTC/USD'
-timeframe = '1h'
+timeframe = '15m'
 weeks = 100
 
 
