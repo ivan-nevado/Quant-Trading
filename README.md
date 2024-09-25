@@ -9,12 +9,11 @@ The focus is on leveraging high-volume trades and market data to optimize perfor
 
 <h3>1. Big Liquidations Detection</h3>
 
-
   - Detects large liquidation events in markets to signal significant price movements. <br>
   - **Usage** -> ```bash python big_liqs.py ```
 <h3>2. Funding Rate</h3>
   - Tracks funding rates to identify arbitrage opportunities across exchanges.  <br>
-  - **Usage**: ```bash python funding.py ``` 
+  - **Usage** ->  ```bash python funding.py ``` 
 <h3>3. Tracking Whale Orders</h3>
   - Monitors significant trades to identify whale activity.
 <h3>4. Orderblock Strategy</h3>
