@@ -1,5 +1,5 @@
 <h1 align="center">⚡ QUANTITATIVE TRADING STRATEGIES ⚡</h1>
-<p align="center"><img src="https://img.shields.io/github/license/ivan-nevado/Quant-Trading" alt="License" /> </p>
+<p align="center"><img src="https://img.shields.io/github/license/ivan-nevado/Quant-Trading" alt="LICENSE" /> </p>
 <img src="https://img.shields.io/github/stars/ivan-nevado/Quant-Trading" alt="Stars" /> </p>
 <h2>🚀 Project Overview</h2>
 Overview</h2> This repository provides quantitative trading strategies using algorithms like big liquidation detection, Fair Value Gap (FVG) analysis, and funding arbitrage. 
