@@ -4,8 +4,10 @@ Overview</h2> This repository provides quantitative trading strategies using alg
 The focus is on leveraging high-volume trades and market data to optimize performance.
 
 <h2>🛠️ Key Strategies</h2>
-
+<img src="file:///C:/Users/Iván/Downloads/huge%20trades.jpg" alt="Big Liquidation Strategy Flowchart" width="600">
 <h3>1. Big Liquidations Detection</h3>
+
+
   - Detects large liquidation events in markets to signal significant price movements. <br>
   - **Usage** -> ```bash python big_liqs.py ```
 <h3>2. Funding Rate</h3>
