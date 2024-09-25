@@ -1,0 +1,4 @@
+Phemex Credentials
+
+key = "************"
+secret = "*************"
