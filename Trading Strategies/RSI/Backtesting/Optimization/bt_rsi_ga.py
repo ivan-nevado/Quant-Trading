@@ -6,6 +6,7 @@ import pandas as pd
 from backtesting import Backtest, Strategy
 from deap import base, creator, tools, algorithms
 import random
+import matplotlib.pyplot as plt
 
 # Load the BTCUSD data from the CSV file
 df = pd.read_csv(r'C:\Users\Iván\Desktop\Ivan\Iván Quant Trading\TFG\BTC-6h-300wks-data.csv')
@@ -87,28 +88,39 @@ bt = Backtest(
     exclusive_orders=True
 )
 
-# Genetic Algorithm (GA) Optimization
+# Define the weights for the return and drawdown combination
+weight_return = 0.5  # Adjust this weight as needed
+weight_drawdown = 0.5  # Adjust this weight as needed
 
-# Define the fitness function (maximize return and minimize drawdown)
+# Track combined fitness for each generation
+generation_combined_fitness = []
+generation_drawdown = []
+generation_return = []
 def fitness_function(individual):
     ema_period, rsi_period, overbought, oversold = individual
-    
-    # Ensure rsi_period is a positive integer
-    rsi_period = max(1, int(rsi_period))  # Set a minimum of 1
+
+    # Ensure ema_period and rsi_period are positive integers
+    ema_period = max(1, int(ema_period))  # Set a minimum of 1 for EMA period
+    rsi_period = max(1, int(rsi_period))   # Set a minimum of 1 for RSI period
 
     results = bt.run(
-        ema_period=int(ema_period), 
+        ema_period=ema_period, 
         rsi_period=rsi_period, 
-        overbought=int(overbought), 
+        overbought=int(overbought),     
         oversold=int(oversold)
     )
     
-    return results['Return [%]'], -results['Max. Drawdown [%]']  # Maximize return, minimize drawdown
+    # Calculate combined fitness
+    combined_fitness = (-weight_return * results['Return [%]']) + (weight_drawdown * results['Max. Drawdown [%]'])
+
+    # Return combined fitness as a tuple
+    return (combined_fitness,)
+
 
 
 # Define individual and population in DEAP
-creator.create("FitnessMax", base.Fitness, weights=(1.0, -1.0))  # Maximize return, minimize drawdown
-creator.create("Individual", list, fitness=creator.FitnessMax)
+creator.create("FitnessMin", base.Fitness, weights=(-1.0,))  # Maximize return, minimize drawdown, maximize combined fitness
+creator.create("Individual", list, fitness=creator.FitnessMin)
 
 toolbox = base.Toolbox()
 toolbox.register("attr_ema_period", random.randint, 50, 200)
@@ -125,22 +137,37 @@ toolbox.register("mate", tools.cxBlend, alpha=0.5)
 toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=10, indpb=0.1)
 toolbox.register("select", tools.selTournament, tournsize=3)
 
-# Define the GA flow
+def track_generations(population, toolbox, cxpb, mutpb, ngen):
+    best_individual = None  # To store the best individual across generations
+
+    for gen in range(ngen):
+        elite = tools.selBest(population, 1)[0]
+        population, _ = algorithms.eaSimple(population, toolbox, cxpb=cxpb, mutpb=mutpb, ngen=1, verbose=False)
+        population[0] = elite
+
+        combined_fitness_values = [ind.fitness.values[0] for ind in population]  # Get combined fitness values
+        best_combined_fitness = min(combined_fitness_values)  # Get the best combined fitness
+
+        generation_combined_fitness.append(best_combined_fitness)  # Store best combined fitness
+
+        print(f"Generation {gen+1}, Best Combined Fitness: {best_combined_fitness}")
+
+
+# Run the genetic algorithm
 population = toolbox.population(n=50)
-algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=40, verbose=True)
+track_generations(population, toolbox, cxpb=0.5, mutpb=0.1, ngen=100)
 
-# Get the best parameters from the population
-best_individual = tools.selBest(population, 1)[0]
-print(f"Best parameters found: EMA Period: {best_individual[0]}, RSI Period: {best_individual[1]}, Overbought: {best_individual[2]}, Oversold: {best_individual[3]}")
+# Plot drawdown vs generations
+plt.figure(figsize=(15, 5))
 
-# Run the final backtest with the optimized parameters
-stats = bt.run(
-    ema_period=int(best_individual[0]), 
-    rsi_period=int(best_individual[1]), 
-    overbought=int(best_individual[2]), 
-    oversold=int(best_individual[3])
-)
-    
-# Print and plot the results
-print(stats)
-bt.plot(resample=None)
+# Plot combined fitness vs generations
+plt.subplot(1, 3, 3)
+plt.plot(range(1, len(generation_combined_fitness) + 1), generation_combined_fitness, marker='o', color='orange')
+plt.title('Combined Fitness vs Generations')
+plt.xlabel('Generation')
+plt.ylabel('Combined Fitness')
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+# bt.plot(resample=None)

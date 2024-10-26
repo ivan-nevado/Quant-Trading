@@ -1,6 +1,7 @@
 import pandas as pd
 from backtesting import Backtest, Strategy
 from pyswarm import pso
+import matplotlib.pyplot as plt
 
 # Load the BTCUSD data from the CSV file
 df = pd.read_csv(r'C:\Users\Iván\Desktop\Ivan\Iván Quant Trading\TFG\BTC-6h-300wks-data.csv')
@@ -69,27 +70,65 @@ bt = Backtest(
     exclusive_orders=True
 )
 
-# Define the fitness function for PSO
+# List to store the best fitness value at each generation
+best_fitness_per_gen = []
+
+# Initialize variables to store the best position and fitness across generations
+global_best_fitness = float('inf')  # Best fitness (lower is better)
+global_best_position = None  # Best parameter set
+
+# Define the fitness function for PSO with weights inside the function
 def pso_fitness_function(params):
     ema_period, rsi_period, overbought, oversold = params
     results = bt.run(ema_period=int(ema_period), rsi_period=int(rsi_period), overbought=int(overbought), oversold=int(oversold))
-    return -results['Return [%]'] + results['Max. Drawdown [%]']  # Minimize objective
+
+    # Define weights for return and drawdown (customize these based on your preferences)
+    weight_return = 1.0
+    weight_drawdown = 1.0
+
+    # Minimize a combination of negative return and drawdown
+    return -weight_return * results['Return [%]'] + weight_drawdown * results['Max. Drawdown [%]']
 
 # Define bounds for each parameter
 lb = [50, 5, 70, 10]  # Lower bounds
 ub = [200, 20, 90, 30]  # Upper bounds
 
-# Run PSO
-xopt, fopt = pso(pso_fitness_function, lb, ub)
-print(f"Optimized parameters: EMA Period: {xopt[0]}, RSI Period: {xopt[1]}, Overbought: {xopt[2]}, Oversold: {xopt[3]}")
+# Set the number of generations and population size
+num_generations = 100  # Customize as needed
+population_size = 50  # Customize as needed
 
-# Use xopt for final run
+# Run PSO and manually track the best fitness at each generation
+for gen in range(num_generations):
+    print(f"Generation {gen + 1} running...")
+
+    # Perform PSO for this generation
+    xopt, fopt = pso(pso_fitness_function, lb, ub, maxiter=1, swarmsize=population_size)
+
+    # If the new fitness is better than the global best, update global best
+    if fopt < global_best_fitness:
+        global_best_fitness = fopt
+        global_best_position = xopt
+
+    # Record the best fitness value for this generation
+    best_fitness_per_gen.append(global_best_fitness)
+
+    print(f"Best fitness at generation {gen + 1}: {global_best_fitness}")
+
+# Plot the fitness improvement over generations
+plt.plot(range(1, len(best_fitness_per_gen) + 1), best_fitness_per_gen, marker='o')
+plt.xlabel('Generation')
+plt.ylabel('Best Fitness Value')
+plt.title('Fitness Improvement Over Generations with Elitism')
+plt.grid(True)
+plt.show()
+
+# Use global_best_position for the final run with the optimized parameters
 stats = bt.run(
-    ema_period=int(xopt[0]), 
-    rsi_period=int(xopt[1]), 
-    overbought=int(xopt[2]), 
-    oversold=int(xopt[3])
+    ema_period=int(global_best_position[0]), 
+    rsi_period=int(global_best_position[1]), 
+    overbought=int(global_best_position[2]), 
+    oversold=int(global_best_position[3])
 )
 
 print(stats)
-bt.plot(resample=None)
+# bt.plot(resample=None)
