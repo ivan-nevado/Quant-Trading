@@ -68,3 +68,32 @@ Particles adjust their positions based on their own experience and the experienc
 Key Concepts:
 Particles: Each particle represents a potential solution.
 Velocity and Position Updates: Particles move through the solution space by updating their positions and velocities based on personal and swarm best experiences.
+<h2>🤖 Machine Learning Algorithms</h2>
+Implemented ML algorithms in QuantConnect using different models:
+<h3>Linear Regression + PCA</h3>
+- PCA (Principal Component Analysis): PCA is a machine learning model used for dimensionality
+  reduction.
+  This simplifies the input features while retaining the most important information.
+- Linear Regression: Linear Regression is another machine learning model used to predict future returns
+  based on the transformed data.
+  It models the relationship between the
+  principal components and future returns in a linear way.
+<h3>Decision Tree</h3>
+- Decision Tree Classifier: A decision tree is a supervised learning algorithm that splits data into branches
+  based on the values of input features. Each branch represents a decision, and the model selects the best
+  features to split the data, helping to predict an outcome.
+<h3>Support Vector Machine</h3>
+- The SVM classifies whether the market is likely to be bullish (prices increasing) or bearish (prices
+  decreasing) based on SPY’s technical indicators.
+- Kernel Trick: The SVM uses the RBF (Radial Basis Function) kernel to handle non-linear relationships
+  between indicators, making it well-suited for capturing complex market behavior.
+<h3>Recurrent Neuronal Network</h3>
+- Recurrent Neural Networks (RNNs): Unlike traditional feedforward neural networks, RNNs have loops in
+  their architecture that allow them to maintain a “memory” of past inputs. This makes RNNs particularly
+  well-suited for tasks involving sequential data, such as time series predictions or stock price forecasting.
+- Stock prices form a time series, meaning that the order in which data points (prices, volumes)
+  occur is important. RNNs can remember and capture dependencies in this sequence, allowing the model
+  to learn meaningful patterns over time.
+<h3>LSTM</h3>
+- Long Short-Term Memory (LSTM): An advanced type of Recurrent Neural Network (RNN) designed to
+  capture both short-term and long-term dependencies in sequential data like stock prices.
