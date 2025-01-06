@@ -1,0 +1,154 @@
+from AlgorithmImports import *
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+
+class EnhancedHarryBrowneLSTM(QCAlgorithm):
+
+    def Initialize(self):
+        self.SetStartDate(2010, 1, 1)
+        self.SetEndDate(2024, 1, 9)
+        self.SetCash(100000)
+
+        self.symbols = ["SPY", "TLT", "GLD",]
+        self.lookback = 252
+        self.prediction_length = 21
+        self.min_weight = 0.1
+        self.min_history = 250  # Minimum required historical data points
+        self.max_history = 500  # Maximum historical data points to use
+
+        self.lstm_models = {}
+        self.scalers = {}
+        self.tradable_symbols = []
+
+        for symbol in self.symbols:
+            self.AddEquity(symbol, Resolution.Daily)
+
+        self.Schedule.On(self.DateRules.MonthStart("SPY"), self.TimeRules.AfterMarketOpen("SPY"), self.Rebalance)
+
+    def OnData(self, data):
+        pass
+
+    def TrainLSTM(self):
+        self.Debug("Starting LSTM training")
+        for symbol in self.symbols:
+            history = self.History(symbol, self.max_history, Resolution.Daily)
+            prices = [x.Close for x in history]
+            
+            if len(prices) < self.min_history:
+                self.Debug(f"Not enough historical data for {symbol}. Found {len(prices)} data points.")
+                continue
+
+            # Use all available data, up to max_history days
+            prices = prices[-self.max_history:] if len(prices) > self.max_history else prices
+            self.Debug(f"Training {symbol} with {len(prices)} data points")
+
+            prices = np.array(prices).reshape(-1, 1)
+            
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            prices_scaled = scaler.fit_transform(prices)
+            self.scalers[symbol] = scaler
+
+            X, y = self.create_sequences(prices_scaled, self.lookback)
+
+            model = Sequential()
+            model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
+            model.add(LSTM(units=50))
+            model.add(Dense(1))
+
+            model.compile(optimizer='adam', loss='mean_squared_error')
+            model.fit(X, y, epochs=25, batch_size=32, verbose=0)
+
+            self.lstm_models[symbol] = model
+            self.tradable_symbols.append(symbol)
+        self.Debug(f"LSTM training completed for {self.tradable_symbols}")
+
+    def create_sequences(self, data, seq_length):
+        X, y = [], []
+        for i in range(len(data) - seq_length - 1):
+            X.append(data[i:(i + seq_length)])
+            y.append(data[i + seq_length])
+        return np.array(X), np.array(y)
+
+    def Rebalance(self):
+        self.Debug(f"Rebalancing at {self.Time}")
+        
+        if not self.lstm_models:
+            self.Debug("LSTM models not trained, training now")
+            self.TrainLSTM()
+        
+        if not self.tradable_symbols:
+            self.Debug("No tradable symbols, skipping rebalance")
+            return
+
+        expected_returns = {}
+        historical_returns = {}
+
+        # Calculate expected returns and collect historical returns
+        for symbol in self.tradable_symbols:
+            history = self.History(symbol, self.lookback, Resolution.Daily)
+            prices = np.array([x.Close for x in history])
+            
+            if len(prices) < self.lookback:
+                self.Debug(f"Not enough historical data for {symbol} during rebalance. Found {len(prices)} data points.")
+                continue
+
+            # Calculate historical returns
+            historical_returns[symbol] = (prices[1:] - prices[:-1]) / prices[:-1]
+
+            # Calculate expected return using LSTM
+            prices_scaled = self.scalers[symbol].transform(prices.reshape(-1, 1))
+            X = prices_scaled[-self.lookback:].reshape(1, self.lookback, 1)
+            predicted_price_scaled = self.lstm_models[symbol].predict(X)
+            predicted_price = self.scalers[symbol].inverse_transform(predicted_price_scaled)[0, 0]
+            current_price = prices[-1]
+            expected_returns[symbol] = (predicted_price - current_price) / current_price
+
+        # Convert historical returns to a DataFrame for easier calculation
+        returns_df = pd.DataFrame(historical_returns)
+
+        # Calculate the full covariance matrix
+        covariance_matrix = returns_df.cov() * 252  # Annualize the covariance
+
+        self.Debug(f"Covariance Matrix:\n{covariance_matrix}")
+
+        # Convert expected returns to a numpy array
+        expected_returns_array = np.array([expected_returns[s] for s in self.tradable_symbols])
+
+        weights = self.OptimizePortfolio(expected_returns_array, covariance_matrix.values)
+        self.Debug(f"Calculated weights: {weights}")
+        self.SetPortfolioWeights(weights)
+
+    def OptimizePortfolio(self, expected_returns, covariance_matrix):
+        n = len(self.tradable_symbols)
+        if n == 1:
+            return [1.0]
+        
+        try:
+            inv_cov = np.linalg.inv(covariance_matrix)
+            ones = np.ones(n)
+            
+            A = np.dot(np.dot(expected_returns.T, inv_cov), expected_returns)
+            B = np.dot(np.dot(ones.T, inv_cov), expected_returns)
+            C = np.dot(np.dot(ones.T, inv_cov), ones)
+            
+            weights = np.dot(inv_cov, (C * expected_returns - B * ones)) / (A * C - B**2)
+            
+            # Ensure minimum weight for each asset
+            weights = np.maximum(weights, self.min_weight)
+            weights = weights / np.sum(weights)  # Normalize to sum to 1
+            
+            return weights
+        except np.linalg.LinAlgError:
+            self.Debug("Optimization failed. Using equal weights.")
+            return np.ones(n) / n
+
+    def SetPortfolioWeights(self, weights):
+        for symbol, weight in zip(self.tradable_symbols, weights):
+            if not np.isnan(weight) and weight > 0:
+                self.SetHoldings(symbol, weight)
+                self.Debug(f"Setting {symbol} weight to {weight}")
+            else:
+                self.Debug(f"Skipping {symbol} due to invalid weight: {weight}")

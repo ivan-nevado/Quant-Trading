@@ -1,0 +1,189 @@
+from AlgorithmImports import *
+import numpy as np
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+
+class ImprovedCasualBrownGiraffe(QCAlgorithm):
+    def Initialize(self):
+        self.SetStartDate(2010, 1, 1)
+        self.SetEndDate(2024, 9, 1)
+        self.SetCash(100000)
+        self.capitalAllocation = 0.05
+        self.trailing_stop_percent = 0.40
+        self.maxValue = 1
+        self.symbol_data = {}
+        
+        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
+        self.spySMA = self.SMA(self.spy, 200)
+        
+        self.UniverseSettings.Resolution = Resolution.Daily
+        self.SetUniverseSelection(CoarseFundamentalUniverseSelectionModel(self.CoarseSelectionFunction))
+        
+        self.SetWarmUp(TimeSpan.FromDays(200))
+        self.initial_filled_prices = {}
+        
+        self.next_rebalance = self.Time
+        self.next_model_train = self.Time
+        
+        self.model = DecisionTreeClassifier(max_depth=5)
+        self.scaler = StandardScaler()
+        self.is_model_trained = False
+
+    def CoarseSelectionFunction(self, coarse):
+        if self.Time < self.next_rebalance:
+            return Universe.Unchanged
+        self.next_rebalance = self.Time + timedelta(days=30)
+        
+        sorted_by_dollar_volume = sorted([x for x in coarse if x.HasFundamentalData],
+                                         key=lambda x: x.DollarVolume, reverse=True)
+        return [x.Symbol for x in sorted_by_dollar_volume[:100]]
+
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            symbol = security.Symbol
+            self.symbol_data[symbol] = SymbolData(self, symbol)
+        
+        for security in changes.RemovedSecurities:
+            if security.Symbol in self.symbol_data:
+                self.symbol_data.pop(security.Symbol)
+            if security.Symbol in self.initial_filled_prices:
+                self.initial_filled_prices.pop(security.Symbol)
+
+    def OnData(self, data: Slice):
+        if self.IsWarmingUp:
+            return
+
+        if self.Time >= self.next_model_train and len(self.symbol_data) > 0:
+            self.TrainModel()
+            self.next_model_train = self.Time + timedelta(days=30)
+
+        if not self.is_model_trained:
+            return
+
+        if self.Securities[self.spy].Price <= self.spySMA.Current.Value:
+            self.Liquidate()
+            return
+
+        invested = [x.Symbol for x in self.Portfolio.Values if x.Invested]
+
+        for symbol in invested:
+            if symbol in self.symbol_data:
+                symbol_data = self.symbol_data[symbol]
+                if symbol_data.stop_loss_price is not None and self.Securities[symbol].Price < symbol_data.stop_loss_price:
+                    self.Liquidate(symbol)
+
+        if len(invested) >= (self.maxValue / self.capitalAllocation):
+            return
+
+        for symbol, symbol_data in self.symbol_data.items():
+            if (len(invested) + len(self.Transactions.GetOpenOrders())) >= (self.maxValue / self.capitalAllocation):
+                return
+
+            features = self.GetFeatures(symbol_data)
+            if features is not None:
+                features_scaled = self.scaler.transform([features])
+                prediction = self.model.predict(features_scaled)[0]
+
+                if (
+                    self.Securities[self.spy].Price > self.spySMA.Current.Value
+                    and symbol_data.bb.IsReady
+                    and self.Securities[symbol].Price > symbol_data.bb.UpperBand.Current.Value
+                    and symbol_data.fastSMA.IsReady and symbol_data.slowSMA.IsReady
+                    and symbol_data.fastSMA.Current.Value > symbol_data.slowSMA.Current.Value
+                    and prediction == 1
+                ):
+                    if symbol not in self.initial_filled_prices:
+                        quantity = self.CalculateOrderQuantity(symbol, self.capitalAllocation * self.maxValue)
+                        order = self.MarketOrder(symbol, quantity)
+                        if order.Status == OrderStatus.Filled:
+                            self.initial_filled_prices[symbol] = order.AverageFillPrice
+                            symbol_data.stop_loss_price = order.AverageFillPrice * (1 - self.trailing_stop_percent)
+
+        for symbol, symbol_data in self.symbol_data.items():
+            if symbol in self.Portfolio and self.Portfolio[symbol].Invested:
+                current_high = self.Securities[symbol].High
+                if current_high > symbol_data.high_price:
+                    symbol_data.high_price = current_high
+                    symbol_data.stop_loss_price = symbol_data.high_price * (1 - self.trailing_stop_percent)
+
+    def TrainModel(self):
+        X, y = [], []
+        for symbol, symbol_data in self.symbol_data.items():
+            features = self.GetFeatures(symbol_data)
+            if features is not None:
+                X.append(features)
+                symbol_history = self.History(symbol, 61, Resolution.Daily)[:-1]
+                spy_history = self.History(self.spy, 61, Resolution.Daily)[:-1]
+                
+                if len(symbol_history) == 60 and len(spy_history) == 60:
+                    symbol_return = ((symbol_history['close'].iloc[-1] - symbol_history['open'].iloc[0]) / 
+                                     symbol_history['open'].iloc[0] if symbol_history['open'].iloc[0] != 0 else 0)
+                    spy_return = ((spy_history['close'].iloc[-1] - spy_history['open'].iloc[0]) / 
+                                  spy_history['open'].iloc[0] if spy_history['open'].iloc[0] != 0 else 0)
+                    y.append(1 if symbol_return > spy_return else 0)
+                else:
+                    y.append(0)  # Default to 0 if not enough history
+
+        if len(X) > 0 and len(X) == len(y):
+            X = self.scaler.fit_transform(X)
+            self.model.fit(X, y)
+            self.is_model_trained = True
+            self.Debug("Model trained successfully")
+        else:
+            self.Debug(f"Not enough data to train the model. X length: {len(X)}, y length: {len(y)}")
+
+    def GetFeatures(self, symbol_data):
+        if not (symbol_data.bb.IsReady and symbol_data.fastSMA.IsReady and symbol_data.slowSMA.IsReady):
+            return None
+
+        history = self.History(symbol_data.Symbol, 101, Resolution.Daily)[:-1]
+        if len(history) < 100:
+            return None
+        
+        closes = history['close'].values
+        volumes = history['volume'].values
+        
+        # Safely calculate returns
+        returns = np.diff(closes) / closes[:-1]
+        returns = returns[np.isfinite(returns)]  # Remove any non-finite values
+        
+        # Safely calculate Bollinger Band position
+        bb_width = symbol_data.bb.UpperBand.Current.Value - symbol_data.bb.LowerBand.Current.Value
+        bb_position = ((closes[-1] - symbol_data.bb.LowerBand.Current.Value) / bb_width 
+                       if bb_width != 0 else 0)
+        
+        # Safely calculate SMA ratio
+        sma_ratio = (symbol_data.fastSMA.Current.Value / symbol_data.slowSMA.Current.Value 
+                     if symbol_data.slowSMA.Current.Value != 0 else 1)
+        
+        # Safely calculate volume ratio
+        volume_ratio = (np.mean(volumes[-30:]) / np.mean(volumes) 
+                        if np.mean(volumes) != 0 else 1)
+        
+        # Safely calculate SMA distance
+        sma_distance = ((closes[-1] / symbol_data.slowSMA.Current.Value) - 1 
+                        if symbol_data.slowSMA.Current.Value != 0 else 0)
+        
+        # Safely calculate momentum
+        momentum = ((closes[-1] - closes[-20]) / closes[-20] 
+                    if closes[-20] != 0 else 0)
+        
+        return [
+            np.mean(returns) if len(returns) > 0 else 0,
+            np.std(returns) if len(returns) > 0 else 0,
+            volume_ratio,
+            bb_position,
+            sma_ratio - 1,
+            sma_distance,
+            momentum,
+        ]
+
+class SymbolData:
+    def __init__(self, algo, symbol):
+        self.Symbol = symbol
+        self.algo = algo
+        self.bb = algo.BB(self.Symbol, 20, 2, MovingAverageType.Simple, Resolution.Daily)
+        self.fastSMA = algo.SMA(self.Symbol, 50, Resolution.Daily)
+        self.slowSMA = algo.SMA(self.Symbol, 200, Resolution.Daily)
+        self.high_price = 0.0
+        self.stop_loss_price = 0.0

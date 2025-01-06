@@ -7,7 +7,9 @@ from websockets import connect
 from termcolor import cprint
 
 # List of symbols you want to track
-symbols = ['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'dogeusdt', 'wifusdt']
+symbols = ['btcusdt', 'ethusdt', 'solusdt', 'dotusdt', 'maticusdt', 'axsusdt', 'atomusdt', 'adausdt', 'galausdt',
+           'aaveusdt', 'hbarusdt', 'xlmusdt', 'ltcusdt', 'runeusdt', 'bchusdt', 'xrpusdt', 'thetausdt', 'iotausdt',
+           'xtzusdt', 'algousdt']
 websocket_base_url = 'wss://stream.binance.com:9443/ws'
 
 # Define TradeAggregator class

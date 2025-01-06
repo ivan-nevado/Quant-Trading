@@ -1,0 +1,254 @@
+from AlgorithmImports import *
+import numpy as np
+from sklearn import svm
+from sklearn.preprocessing import StandardScaler
+
+class SVMMarketClassifier:
+    def __init__(self, algorithm, symbol, lookback=2520):  # ~10 years of trading days
+        self.algorithm = algorithm
+        self.symbol = symbol
+        self.lookback = lookback
+        self.features = ['Close', 'Volume', 'RSI', 'MACD', 'BBUpper', 'BBLower']
+        self.X = np.zeros((lookback, len(self.features)))
+        self.y = np.zeros(lookback)
+        self.current_index = 0
+        self.is_trained = False
+        
+        self.svm_model = svm.SVC(kernel='rbf', C=1.0, probability=True)
+        self.scaler = StandardScaler()
+    
+    def InitializeWithHistoricalData(self, historical_data):
+        for i, bar in enumerate(historical_data):
+            self.X[i] = [
+                bar['Close'],
+                bar['Volume'],
+                bar['RSI'],
+                bar['MACD'],
+                bar['BBUpper'],
+                bar['BBLower']
+            ]
+            if i > 0:
+                self.y[i-1] = 1 if bar['Close'] > historical_data[i-1]['Close'] else 0
+        
+        self.current_index = len(historical_data)
+        self.Train()
+    
+    def Update(self, current_price, current_volume, rsi, macd, bb_upper, bb_lower):
+        # Update feature matrix
+        self.X[self.current_index % self.lookback] = [
+            current_price,
+            current_volume,
+            rsi,
+            macd,
+            bb_upper,
+            bb_lower
+        ]
+        
+        # Update target (1 if price increased, 0 otherwise)
+        if self.current_index > 0:
+            self.y[(self.current_index - 1) % self.lookback] = 1 if current_price > self.X[(self.current_index - 1) % self.lookback, 0] else 0
+        
+        self.current_index += 1
+        if self.current_index % self.lookback == 0:
+            self.Train()
+    
+    def Train(self):
+        # Scale features
+        X_scaled = self.scaler.fit_transform(self.X)
+        
+        # Train SVM model
+        self.svm_model.fit(X_scaled, self.y)
+        self.is_trained = True
+    
+    def Predict(self, current_price, current_volume, rsi, macd, bb_upper, bb_lower):
+        if not self.is_trained:
+            return None
+        
+        features = np.array([[
+            current_price,
+            current_volume,
+            rsi,
+            macd,
+            bb_upper,
+            bb_lower
+        ]])
+        
+        features_scaled = self.scaler.transform(features)
+        probabilities = self.svm_model.predict_proba(features_scaled)
+        
+        return probabilities[0][1]  # Probability of bullish market
+
+class SVMEnhancedStrategy(QCAlgorithm):
+
+    def Initialize(self):
+        self.SetStartDate(2010, 1, 1)  # Start of trading period
+        self.SetEndDate(2024, 9, 2)  # End of backtesting period
+        self.SetCash(100000)  # Set Strategy Cash
+        self.capitalAllocation = 0.05
+        self.maxValue = 1
+
+        # Add SPY data
+        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
+        
+        # Initialize SVM classifier
+        self.svm_classifier = SVMMarketClassifier(self, self.spy)
+
+        # Universe selection
+        self.SetUniverseSelection(QC500UniverseSelectionModel())
+        self.UniverseSettings.Resolution = Resolution.Daily
+
+        self.symbol_data = {}
+
+        # Initialize indicators for SPY
+        self.spy_rsi = self.RSI(self.spy, 14, Resolution.Daily)
+        self.spy_macd = self.MACD(self.spy, 12, 26, 9, Resolution.Daily)
+        self.spy_bb = self.BB(self.spy, 20, 2, Resolution.Daily)
+
+        # Load historical data and train SVM
+        self.LoadHistoricalDataAndTrain()
+
+    def LoadHistoricalDataAndTrain(self):
+        # Load 10 years of historical data for SPY
+        history = self.History(self.spy, start=datetime(2000, 1, 1), end=datetime(2009, 12, 31), resolution=Resolution.Daily)
+        
+        if history.empty:
+            self.Debug("Error: Unable to load historical data")
+            return
+
+        # Prepare historical data for SVM
+        historical_data = []
+        for time, row in history.loc[self.spy].iterrows():
+            # Update indicators
+            self.spy_rsi.Update(time, row['close'])
+            self.spy_macd.Update(time, row['close'])
+            self.spy_bb.Update(time, row['close'])
+
+            # Only add data point if all indicators are ready
+            if self.spy_rsi.IsReady and self.spy_macd.IsReady and self.spy_bb.IsReady:
+                historical_data.append({
+                    'Close': row['close'],
+                    'Volume': row['volume'],
+                    'RSI': self.spy_rsi.Current.Value,
+                    'MACD': self.spy_macd.Current.Value,
+                    'BBUpper': self.spy_bb.UpperBand.Current.Value,
+                    'BBLower': self.spy_bb.LowerBand.Current.Value
+                })
+
+        # Initialize SVM with historical data
+        self.svm_classifier.InitializeWithHistoricalData(historical_data)
+        self.Debug("SVM initialized with historical SPY data")
+
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            self.symbol_data[security.Symbol.Value] = SymbolData(self, security.Symbol)
+
+        for security in changes.RemovedSecurities:
+            if security.Symbol.Value in self.symbol_data:
+                del self.symbol_data[security.Symbol.Value]
+
+    def OnData(self, data: Slice):
+        if not data.ContainsKey(self.spy):
+            return
+
+        spy_bar = data.get(self.spy)
+        if spy_bar is None:
+            self.Debug(f"No data available for SPY at {self.Time}")
+            return
+
+        current_price = spy_bar.Close
+        current_volume = spy_bar.Volume
+
+        if current_price is None or current_volume is None:
+            self.Debug(f"Missing price or volume data for SPY at {self.Time}")
+            return
+
+        if not self.spy_rsi.IsReady or not self.spy_macd.IsReady or not self.spy_bb.IsReady:
+            return
+
+        # Update SVM classifier with SPY data
+        self.svm_classifier.Update(current_price, current_volume, 
+                                   self.spy_rsi.Current.Value,
+                                   self.spy_macd.Current.Value,
+                                   self.spy_bb.UpperBand.Current.Value,
+                                   self.spy_bb.LowerBand.Current.Value)
+
+        # Get market prediction probability based on SPY
+        market_probability = self.svm_classifier.Predict(current_price, current_volume,
+                                                         self.spy_rsi.Current.Value,
+                                                         self.spy_macd.Current.Value,
+                                                         self.spy_bb.UpperBand.Current.Value,
+                                                         self.spy_bb.LowerBand.Current.Value)
+
+        if market_probability is None:
+            return  # SVM not yet trained
+
+        self.Debug(f"Market bullish probability: {market_probability:.2f} @ {self.Time}")
+
+        if market_probability < 0.5:  # Strongly bearish
+            self.Liquidate()
+            self.Debug(f"SVM predicts strongly bearish market (prob: {market_probability:.2f}) @ {self.Time}")
+            return
+
+        if market_probability > 0.5:  # Strongly bullish
+            self.Debug(f"SVM predicts strongly bullish market (prob: {market_probability:.2f}) @ {self.Time}")
+            
+            # Check for entries in QC500 universe
+            invested = [x.Symbol for x in self.Portfolio.Values if x.Invested]
+            
+            if len(invested) >= (self.maxValue / self.capitalAllocation):
+                return
+            
+            for ticker, symbol_data in self.symbol_data.items():
+                if len(invested) + len(self.Transactions.GetOpenOrders()) >= (self.maxValue / self.capitalAllocation):
+                    return
+
+                symbol = symbol_data.Symbol
+                if symbol not in data:
+                    continue
+
+                symbol_bar = data.get(symbol)
+                if symbol_bar is None or symbol_bar.Close is None:
+                    continue
+
+                current_price = symbol_bar.Close
+                symbol_data.Update(current_price)
+
+                if current_price > symbol_data.sma.Current.Value:
+                    quantity = self.CalculateOrderQuantity(symbol, self.capitalAllocation * self.maxValue)
+                    self.MarketOrder(symbol, quantity)
+                    self.Debug(f"Entered {ticker} @ {self.Time} with close {current_price}")
+
+        # Check for exits (this can happen regardless of the current market prediction)
+        invested = [x.Symbol for x in self.Portfolio.Values if x.Invested]
+        for symbol in invested:
+            if symbol.Value in self.symbol_data:
+                symbol_data = self.symbol_data[symbol.Value]
+                symbol_bar = data.get(symbol)
+                if symbol_bar is None or symbol_bar.Close is None:
+                    continue
+                current_price = symbol_bar.Close
+                symbol_data.Update(current_price)
+
+                if current_price < symbol_data.sma.Current.Value:
+                    if all(symbol_data.priceRolling[i] < symbol_data.smaRolling[i] for i in range(1,4)):
+                        self.Debug(f"{symbol.Value} liquidated @ {self.Time}")
+                        self.Liquidate(symbol)
+            else:
+                self.Liquidate(symbol)
+                self.Debug(f"{symbol.Value} liquidated @ {self.Time}")
+
+        self.Plot("SPY", "SPY", self.Securities[self.spy].Price)
+        self.Plot("SPY", "SMA", self.symbol_data["SPY"].sma.Current.Value)
+        self.Plot("Market Sentiment", "Bullish Probability", market_probability)
+
+class SymbolData:
+    def __init__(self, algorithm, symbol):
+        self.Symbol = symbol
+        self.sma = algorithm.SMA(symbol, 200, Resolution.Daily)
+        self.smaRolling = RollingWindow[float](2)
+        self.priceRolling = RollingWindow[float](4)  # Increased to 4 for the exit condition
+
+    def Update(self, current_price):
+        if self.sma.IsReady:
+            self.smaRolling.Add(self.sma.Current.Value)
+            self.priceRolling.Add(current_price)

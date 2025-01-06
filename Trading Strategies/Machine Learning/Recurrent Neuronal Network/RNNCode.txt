@@ -1,0 +1,185 @@
+from AlgorithmImports import *
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+
+class ImprovedCasualBrownGiraffe(QCAlgorithm):
+    def Initialize(self):
+        self.SetStartDate(2010, 1, 1)
+        self.SetEndDate(2024, 9, 1)
+        self.SetCash(100000)
+        
+        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
+        
+        self.rsiPeriod = 2
+        self.rsi = self.RSI(self.spy, self.rsiPeriod, Resolution.Daily)
+        self.ma9 = self.SMA(self.spy, 9, Resolution.Daily)
+        self.ma200 = self.SMA(self.spy, 200, Resolution.Daily)
+        
+        self.SetWarmUp(200)
+        
+        # RNN parameters
+        self.lookback = 10
+        self.feature_count = 2  # price_change, overnight_gap, volume_change
+        self.hidden_size = 64
+        self.learning_rate = 0.01
+        self.prediction = 0
+        
+        # Initialize StandardScaler
+        self.scaler = StandardScaler()
+        
+        # Initialize and train the RNN
+        self.InitializeRNN()
+        self.TrainRNN()
+
+    def InitializeRNN(self):
+        np.random.seed(42)  # for reproducibility
+        self.Wxh = np.random.randn(self.hidden_size, self.feature_count) * 0.01
+        self.Whh = np.random.randn(self.hidden_size, self.hidden_size) * 0.01
+        self.Why = np.random.randn(1, self.hidden_size) * 0.01
+        self.bh = np.zeros((self.hidden_size, 1))
+        self.by = np.zeros((1, 1))
+
+    def TrainRNN(self):
+        history = self.History(self.spy, datetime(2000, 1, 1), datetime(2009, 12, 31), Resolution.Daily)
+        
+        features = []
+        targets = []
+        for i in range(len(history) - self.lookback):
+            feature = self.GetFeaturesFromHistory(history.iloc[i:i+self.lookback+1])
+            if feature is not None:
+                features.append(feature)
+                target = (history['close'].iloc[i+self.lookback] - history['open'].iloc[i+self.lookback]) / history['open'].iloc[i+self.lookback]
+                targets.append(target)
+        
+        features = np.array(features)
+        targets = np.array(targets).reshape(-1, 1)
+        
+        # Fit the scaler on the flattened features
+        self.scaler.fit(features.reshape(-1, self.feature_count))
+        
+        # Transform the features
+        features_scaled = self.scaler.transform(features.reshape(-1, self.feature_count)).reshape(features.shape)
+        
+        epochs = 100
+        for epoch in range(epochs):
+            epoch_loss = 0
+            for feature, target in zip(features_scaled, targets):
+                prediction, hidden_states = self.forward(feature)
+                loss = np.square(prediction - target).mean()
+                epoch_loss += loss
+                self.backward(feature, hidden_states, target, prediction)
+            
+            if epoch % 10 == 0:
+                self.Debug(f"Epoch {epoch}, Loss: {epoch_loss / len(features)}")
+        
+        self.Debug("RNN training completed")
+
+    def forward(self, X):
+        h = np.zeros((self.hidden_size, 1))
+        hidden_states = []
+        for x in X:
+            h = np.tanh(np.dot(self.Wxh, x.reshape(-1, 1)) + np.dot(self.Whh, h) + self.bh)
+            hidden_states.append(h)
+        y = np.dot(self.Why, h) + self.by
+        return y, hidden_states
+
+    def backward(self, X, hidden_states, y, y_pred):
+        dWxh, dWhh, dWhy = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.Why)
+        dbh, dby = np.zeros_like(self.bh), np.zeros_like(self.by)
+        dhnext = np.zeros((self.hidden_size, 1))
+        
+        dy = y_pred - y
+        dWhy += np.dot(dy, hidden_states[-1].T)
+        dby += dy
+        
+        for t in reversed(range(len(X))):
+            dh = np.dot(self.Why.T, dy) + dhnext
+            dhraw = (1 - hidden_states[t] * hidden_states[t]) * dh
+            dbh += dhraw
+            dWxh += np.dot(dhraw, X[t].reshape(1, -1))
+            dWhh += np.dot(dhraw, hidden_states[t-1].T) if t > 0 else np.zeros_like(self.Whh)
+            dhnext = np.dot(self.Whh.T, dhraw)
+        
+        for dparam in [dWxh, dWhh, dWhy, dbh, dby]:
+            np.clip(dparam, -5, 5, out=dparam)
+        
+        self.Wxh -= self.learning_rate * dWxh
+        self.Whh -= self.learning_rate * dWhh
+        self.Why -= self.learning_rate * dWhy
+        self.bh -= self.learning_rate * dbh
+        self.by -= self.learning_rate * dby
+
+    def OnData(self, data: Slice):
+        if self.IsWarmingUp or not self.rsi.IsReady or not self.ma9.IsReady or not self.ma200.IsReady:
+            return
+        
+        rsi_value = self.rsi.Current.Value
+        current_price = self.Securities[self.spy].Price
+        
+        features = self.GetFeatures()
+        features_scaled = None
+        self.prediction = None
+
+        if features is not None:
+            # Scale the features
+            features_scaled = self.scaler.transform(features.reshape(-1, self.feature_count)).reshape(features.shape)
+            self.prediction, _ = self.forward(features_scaled)
+            self.prediction = self.prediction[0][0]
+        
+        # Log features and prediction
+        debug_message = f"Time: {self.Time}, Features: {features}"
+        if features_scaled is not None:
+            debug_message += f", Scaled Features: {features_scaled}"
+        if self.prediction is not None:
+            debug_message += f", Prediction: {self.prediction}"
+        self.Debug(debug_message)
+        
+        if self.prediction is None:
+            return
+
+        if rsi_value < 10 and current_price > self.ma200.Current.Value and self.prediction > 0:
+            if not self.Portfolio.Invested:
+                self.SetHoldings(self.spy, 1)
+                self.Debug(f"Enter long: RSI(2)={rsi_value}, Price > MA200, Prediction={self.prediction:.4f} @ {self.Time}")
+        
+        elif self.Portfolio[self.spy].IsLong and (current_price > self.ma9.Current.Value):
+            if self.Portfolio.Invested:
+                self.Liquidate()
+                self.Debug(f"Exit long: Price > MA9 or Prediction={self.prediction:.4f} @ {self.Time}")
+        
+        elif rsi_value > 90 and current_price < self.ma200.Current.Value and self.prediction < 0:
+            if not self.Portfolio.Invested:
+                self.SetHoldings(self.spy, -1)
+                self.Debug(f"Enter short: RSI(2)={rsi_value}, Price < MA200, Prediction={self.prediction:.4f} @ {self.Time}")
+        
+        elif self.Portfolio[self.spy].IsShort and (current_price < self.ma9.Current.Value):
+            if self.Portfolio.Invested:
+                self.Liquidate()
+                self.Debug(f"Exit short: Price < MA9 or Prediction={self.prediction:.4f} @ {self.Time}")
+        
+        self.Plot("SPY", "Price", current_price)
+        self.Plot("SPY", "MA9", self.ma9.Current.Value)
+        self.Plot("SPY", "MA200", self.ma200.Current.Value)
+        self.Plot("RSI", "RSI", rsi_value)
+        self.Plot("Prediction", "Prediction", self.prediction)
+
+    def GetFeatures(self):
+        history = self.History(self.spy, self.lookback + 1, Resolution.Daily)
+        return self.GetFeaturesFromHistory(history)
+
+    def GetFeaturesFromHistory(self, history):
+        if len(history) < self.lookback + 1:
+            return None
+        
+        closes = history['close'].values
+        opens = history['open'].values
+        #volumes = history['volume'].values
+        
+        features = []
+        for i in range(1, self.lookback + 1):
+            price_change = (closes[-i] - closes[-i-1]) / closes[-i-1]
+            overnight_gap = opens[-i] / closes[-i-1] - 1
+            #volume_change = (volumes[-i] - volumes[-i-1]) / volumes[-i-1]
+            features.append([price_change, overnight_gap])
+        
+        return np.array(features)

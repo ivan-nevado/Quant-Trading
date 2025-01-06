@@ -1,0 +1,113 @@
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression
+from Execution.ImmediateExecutionModel import ImmediateExecutionModel
+from Selection.UniverseSelectionModel import UniverseSelectionModel
+from collections import deque
+
+from AlgorithmImports import *
+
+class PCATradingAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetStartDate(2010, 1, 1)
+        self.SetEndDate(2024, 1, 9)
+        self.SetCash(100000)
+        self.symbol = self.AddEquity("SPY", Resolution.Daily).Symbol
+        self.rsi_periods = range(2, 25)
+        self.pca = PCA(n_components=3)
+        self.regression_model = LinearRegression()
+        self.is_trained = False
+        self.lookback = 3
+        self.predicted_returns_window = deque(maxlen=50)
+        self.last_trade_date = None  # Track the date of the last trade
+
+        self.Debug("Initialization complete. Starting model training...")
+        self.TrainModel()
+
+        self.Schedule.On(self.DateRules.EveryDay(self.symbol), self.TimeRules.AfterMarketOpen(self.symbol), self.Trade)
+
+    def TrainModel(self):
+        # Load historical data for training
+        history = self.History(self.symbol, datetime(2000, 1, 1), datetime(2010, 1, 1), Resolution.Daily)
+
+        # Calculate RSI and future returns for training
+        rsi_values = self.CalculateRSI(history, self.rsi_periods)
+        future_returns = history['close'].pct_change(self.lookback).shift(-self.lookback)
+
+        # Drop any rows with NaN values
+        rsi_values.dropna(inplace=True)
+        future_returns.dropna(inplace=True)
+
+        # Ensure that the indices match
+        common_index = rsi_values.index.intersection(future_returns.index)
+        rsi_values = rsi_values.loc[common_index]
+        future_returns = future_returns.loc[common_index]
+
+        # Fit PCA on the RSI values
+        pca_features = self.pca.fit_transform(rsi_values)
+
+        # Fit the linear regression model
+        self.regression_model.fit(pca_features, future_returns)
+
+        self.is_trained = True
+        self.Debug(f"Models trained on historical data with {len(common_index)} samples")
+
+
+    def CalculateRSI(self, history, periods):
+        rsi_data = {}
+        for period in periods:
+            delta = history['close'].diff()
+            gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+            loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            rsi_data[f'RSI_{period}'] = rsi
+        rsi_df = pd.DataFrame(rsi_data)
+        return rsi_df
+
+    def Trade(self):
+        if not self.is_trained:
+            self.Debug("Attempted to trade but model is not trained.")
+            return
+
+        current_data = self.History(self.symbol, max(self.rsi_periods) + 1, Resolution.Daily)
+        if current_data.empty:
+            self.Debug("Current data for trading decision is empty.")
+            return
+
+
+        current_rsi_df = self.CalculateRSI(current_data, self.rsi_periods)
+        
+        # Drop rows with NaN values
+        current_rsi_df.dropna(inplace=True)
+        
+        if current_rsi_df.empty:
+            self.Debug("Current RSI DataFrame is empty.")
+            return
+
+        current_pca_features = self.pca.transform(current_rsi_df)
+
+        predicted_return = self.regression_model.predict(current_pca_features)[0]
+        #self.predicted_returns_window.append(predicted_return)
+
+        #long_threshold = np.percentile(self.predicted_returns_window, 90)
+        #short_threshold = np.percentile(self.predicted_returns_window, 10)
+
+        #self.Debug(f"Predicted return: {predicted_return}, Long threshold: {long_threshold}, Short threshold: {short_threshold}")
+
+        if self.last_trade_date is None or (self.Time - self.last_trade_date).days >= 3:
+
+            if predicted_return > 0:
+                self.SetHoldings(self.symbol, 1)
+                self.Debug("Going long based on predicted returns.")
+                self.last_trade_date = self.Time 
+            #elif predicted_return < 0:
+                #self.SetHoldings(self.symbol, -1)
+                #self.Debug("Going short based on predicted returns.")
+                #self.last_trade_date = self.Time 
+            else:
+                self.Liquidate()
+                self.Debug("Liquidating based on predicted returns.")
+                self.last_trade_date = self.Time 
+
